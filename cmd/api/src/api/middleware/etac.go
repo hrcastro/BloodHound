@@ -22,7 +22,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/specterops/bloodhound/cmd/api/src/api"
-	"github.com/specterops/bloodhound/cmd/api/src/api/v2"
+	v2 "github.com/specterops/bloodhound/cmd/api/src/api/v2"
 	"github.com/specterops/bloodhound/cmd/api/src/auth"
 	"github.com/specterops/bloodhound/cmd/api/src/ctx"
 	"github.com/specterops/bloodhound/cmd/api/src/database"
@@ -52,6 +52,27 @@ func SupportsETACMiddleware(db database.Database) mux.MiddlewareFunc {
 				api.WriteErrorResponse(request.Context(), api.BuildErrorResponse(http.StatusForbidden, "user does not have permission to access this environment", request), response)
 			} else {
 				next.ServeHTTP(response, request)
+			}
+		})
+	}
+}
+
+// RequireAllEnvironmentAccessMiddleware will check if a user's all environments flag is true and return a forbidden response code if set to false
+func RequireAllEnvironmentAccessMiddleware(db database.Database) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if etacFlag, err := db.GetFlagByKey(request.Context(), appcfg.FeatureETAC); err != nil {
+				api.HandleDatabaseError(request, response, err)
+			} else if !etacFlag.Enabled {
+				next.ServeHTTP(response, request)
+			} else if bhCtx := ctx.FromRequest(request); !bhCtx.AuthCtx.Authenticated() {
+				api.WriteErrorResponse(request.Context(), api.BuildErrorResponse(http.StatusUnauthorized, "not authenticated", request), response)
+			} else if currentUser, found := auth.GetUserFromAuthCtx(bhCtx.AuthCtx); !found {
+				api.WriteErrorResponse(request.Context(), api.BuildErrorResponse(http.StatusBadRequest, "no associated user found with request", request), response)
+			} else if currentUser.AllEnvironments {
+				next.ServeHTTP(response, request)
+			} else {
+				api.WriteErrorResponse(request.Context(), api.BuildErrorResponse(http.StatusForbidden, "user does not have access to this resource", request), response)
 			}
 		})
 	}
